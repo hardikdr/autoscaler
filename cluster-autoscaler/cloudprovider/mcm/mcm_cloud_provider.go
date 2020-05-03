@@ -24,11 +24,12 @@ package mcm
 import (
 	"fmt"
 	"strings"
+	"time"
 
-	"github.com/golang/glog"
 	"github.com/gardener/autoscaler/cluster-autoscaler/cloudprovider"
 	"github.com/gardener/autoscaler/cluster-autoscaler/config/dynamic"
 	"github.com/gardener/autoscaler/cluster-autoscaler/utils/errors"
+	"github.com/golang/glog"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,6 +39,9 @@ import (
 const (
 	// ProviderName is the cloud provider name for MCM
 	ProviderName = "mcm"
+
+	//MachineTypeNotAvailableAnnotation is an annotation put by MCM on machine-deployment if certain machine-types are not available.
+	MachineTypeNotAvailableAnnotation = "machine.sapcloud.io/machine-type-not-available"
 )
 
 // MCMCloudProvider implements the cloud provider interface for machine-controller-manager
@@ -114,15 +118,15 @@ func (mcm *mcmCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.N
 		glog.Warningf("Node %v has no providerId", node.Name)
 		return nil, nil
 	}
-    
+
 	ref, err := ReferenceFromProviderID(mcm.mcmManager, node.Spec.ProviderID)
 	if err != nil {
 		return nil, err
 	}
 
 	if ref == nil {
- 		glog.Infof("Skipped node %v, not managed by this controller", node.Spec.ProviderID)
-		return nil, nil 
+		glog.Infof("Skipped node %v, not managed by this controller", node.Spec.ProviderID)
+		return nil, nil
 	}
 
 	return mcm.mcmManager.GetMachineDeploymentForMachine(ref)
@@ -180,10 +184,10 @@ func ReferenceFromProviderID(m *McmManager, id string) (*Ref, error) {
 			break
 		}
 	}
-	
+
 	if Name == "" {
 		// Could not find any machine corresponds to node %+v", id
-		return nil, nil 
+		return nil, nil
 	}
 	return &Ref{
 		Name:      Name,
@@ -246,14 +250,45 @@ func (machinedeployment *MachineDeployment) IncreaseSize(delta int) error {
 	if delta <= 0 {
 		return fmt.Errorf("size increase must be positive")
 	}
-	size, err := machinedeployment.mcmManager.GetMachineDeploymentSize(machinedeployment)
+
+	md, err := machinedeployment.mcmManager.machineclient.MachineDeployments(machinedeployment.Namespace).Get(machinedeployment.Name, metav1.GetOptions{})
 	if err != nil {
-		return err
+		return fmt.Errorf("Unable to fetch MachineDeployment object %s %+v", machinedeployment.Name, err)
 	}
+
+	size := int64(md.Spec.Replicas)
+
 	if int(size)+delta > machinedeployment.MaxSize() {
 		return fmt.Errorf("size increase too large - desired:%d max:%d", int(size)+delta, machinedeployment.MaxSize())
 	}
-	return machinedeployment.mcmManager.SetMachineDeploymentSize(machinedeployment, size+int64(delta))
+
+	if md.Spec.Template.Spec.NodeTemplateSpec.Annotations[MachineTypeNotAvailableAnnotation] == "True" {
+		return fmt.Errorf("machine types are not supported in the cloud, hence skipping the scale-up for node-group %q", md.Name)
+	}
+
+	err = machinedeployment.mcmManager.SetMachineDeploymentSize(machinedeployment, size+int64(delta))
+	if err != nil {
+		return fmt.Errorf("failed to set the size for machine-deployment %q while scaling-up %+v", md.Name, err)
+	}
+
+	// Wait for few seconds, to check if the machine-type is available in cloud, and scale-up is successful.
+	// Currently machine-deployment immediately adds the annotation if the machine-types are not available, if this few-seconds below is not sufficient, autoscaler will anyways catch it in next reconcilliation[node-provisioning timeout ~15mins].
+	time.Sleep(5 * time.Second)
+	md, err = machinedeployment.mcmManager.machineclient.MachineDeployments(machinedeployment.Namespace).Get(machinedeployment.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("Unable to fetch MachineDeployment object %s %+v", machinedeployment.Name, err)
+	}
+
+	if md.Spec.Template.Spec.NodeTemplateSpec.Annotations[MachineTypeNotAvailableAnnotation] == "True" {
+		// Reverting the size else autoscaler will wait for the failed machines to join.
+		err = machinedeployment.mcmManager.SetMachineDeploymentSize(machinedeployment, size)
+		if err != nil {
+			return fmt.Errorf("failed to revert the size of machine-deployment %q %+v", md.Name, err)
+		}
+		return fmt.Errorf("machine type are not supported in the cloud, hence skipping the scale-up for node-group %q", md.Name)
+	}
+
+	return nil
 }
 
 // DecreaseTargetSize decreases the target size of the node group. This function
