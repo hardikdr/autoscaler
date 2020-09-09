@@ -22,6 +22,7 @@ Modifications Copyright (c) 2017 SAP SE or an SAP affiliate company. All rights 
 package mcm
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -29,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/config"
 	"k8s.io/autoscaler/cluster-autoscaler/config/dynamic"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/klog"
@@ -38,6 +40,10 @@ import (
 const (
 	// ProviderName is the cloud provider name for MCM
 	ProviderName = "mcm"
+
+	// GPULabel is the label added to nodes with GPU resource.
+	// TODO: Align on a GPU Label for Gardener.
+	GPULabel = "gardener.cloud/accelerator"
 )
 
 // MCMCloudProvider implements the cloud provider interface for machine-controller-manager
@@ -50,9 +56,6 @@ type mcmCloudProvider struct {
 
 // BuildMcmCloudProvider builds CloudProvider implementation for machine-controller-manager.
 func BuildMcmCloudProvider(mcmManager *McmManager, resourceLimiter *cloudprovider.ResourceLimiter) (cloudprovider.CloudProvider, error) {
-	if err := mcmManager.discoveryOpts.Validate(); err != nil {
-		return nil, fmt.Errorf("Failed to build an mcm cloud provider: %v", err)
-	}
 	if mcmManager.discoveryOpts.StaticDiscoverySpecified() {
 		return buildStaticallyDiscoveringProvider(mcmManager, mcmManager.discoveryOpts.NodeGroupSpecs, resourceLimiter)
 	}
@@ -61,9 +64,9 @@ func BuildMcmCloudProvider(mcmManager *McmManager, resourceLimiter *cloudprovide
 
 // BuildMCM builds the MCM provider and MCMmanager.
 func BuildMCM(opts config.AutoscalingOptions, do cloudprovider.NodeGroupDiscoveryOptions, rl *cloudprovider.ResourceLimiter) cloudprovider.CloudProvider {
-	var mcmManager *mcm.McmManager
+	var mcmManager *McmManager
 	var err error
-	mcmManager, err = mcm.CreateMcmManager(do)
+	mcmManager, err = CreateMcmManager(do)
 
 	if err != nil {
 		klog.Fatalf("Failed to create MCM Manager: %v", err)
@@ -176,6 +179,16 @@ func (mcm *mcmCloudProvider) Refresh() error {
 	return nil
 }
 
+// GPULabel returns the label added to nodes with GPU resource.
+func (mcm *mcmCloudProvider) GPULabel() string {
+	return GPULabel
+}
+
+// GetAvailableGPUTypes return all available GPU types cloud provider supports
+func (mcm *mcmCloudProvider) GetAvailableGPUTypes() map[string]struct{} {
+	return nil
+}
+
 // Ref contains a reference to the name of the machine-deployment.
 type Ref struct {
 	Name      string
@@ -184,7 +197,7 @@ type Ref struct {
 
 // ReferenceFromProviderID extracts the Ref from providerId. It returns corresponding machine-name to providerid.
 func ReferenceFromProviderID(m *McmManager, id string) (*Ref, error) {
-	machines, err := m.machineclient.Machines(m.namespace).List(metav1.ListOptions{})
+	machines, err := m.machineclient.Machines(m.namespace).List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("Could not list machines due to error: %s", err)
 	}
@@ -355,8 +368,19 @@ func (machinedeployment *MachineDeployment) Debug() string {
 }
 
 // Nodes returns a list of all nodes that belong to this node group.
-func (machinedeployment *MachineDeployment) Nodes() ([]string, error) {
-	return machinedeployment.mcmManager.GetMachineDeploymentNodes(machinedeployment)
+func (machinedeployment *MachineDeployment) Nodes() ([]cloudprovider.Instance, error) {
+	nodeProviderIDs, err := machinedeployment.mcmManager.GetMachineDeploymentNodes(machinedeployment)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to get the nodes backed by the machinedeployment %q", machinedeployment.Name)
+	}
+
+	instances := make([]cloudprovider.Instance, len(nodeProviderIDs))
+	for i := range nodeProviderIDs {
+		instances[i] = cloudprovider.Instance{
+			Id: nodeProviderIDs[i],
+		}
+	}
+	return instances, nil
 }
 
 // TemplateNodeInfo returns a node template for this node group.

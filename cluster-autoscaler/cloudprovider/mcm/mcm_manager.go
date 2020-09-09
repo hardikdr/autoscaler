@@ -22,6 +22,7 @@ Modifications Copyright (c) 2017 SAP SE or an SAP affiliate company. All rights 
 package mcm
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"os"
@@ -33,7 +34,8 @@ import (
 	machineapi "github.com/gardener/machine-controller-manager/pkg/client/clientset/versioned/typed/machine/v1alpha1"
 	machineinformers "github.com/gardener/machine-controller-manager/pkg/client/informers/externalversions"
 	machinelisters "github.com/gardener/machine-controller-manager/pkg/client/listers/machine/v1alpha1"
-	corecontroller "github.com/gardener/machine-controller-manager/pkg/controller"
+
+	//corecontroller "github.com/gardener/machine-controller-manager/pkg/controller"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -95,7 +97,7 @@ func createMCMManagerInternal(discoveryOpts cloudprovider.NodeGroupDiscoveryOpti
 		}
 	}
 
-	controlClientBuilder := corecontroller.SimpleClientBuilder{
+	controlClientBuilder := SimpleClientBuilder{
 		ClientConfig: controlKubeconfig,
 	}
 
@@ -144,7 +146,7 @@ func (m *McmManager) GetMachineDeploymentForMachine(machine *Ref) (*MachineDeplo
 		//Considering the possibility when Machine has been deleted but due to cached Node object it appears here.
 		return nil, fmt.Errorf("Node does not Exists")
 	}
-	machineObject, err := m.machineclient.Machines(m.namespace).Get(machine.Name, metav1.GetOptions{})
+	machineObject, err := m.machineclient.Machines(m.namespace).Get(context.TODO(), machine.Name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("Unable to fetch Machine object %s %+v", machine.Name, err)
 	}
@@ -156,7 +158,7 @@ func (m *McmManager) GetMachineDeploymentForMachine(machine *Ref) (*MachineDeplo
 		return nil, fmt.Errorf("Unable to find parent MachineSet of given Machine object %s %+v", machine.Name, err)
 	}
 
-	machineSetObject, err := m.machineclient.MachineSets(m.namespace).Get(machineSetName, metav1.GetOptions{})
+	machineSetObject, err := m.machineclient.MachineSets(m.namespace).Get(nil, machineSetName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("Unable to fetch MachineSet object %s %+v", machineSetName, err)
 	}
@@ -207,7 +209,7 @@ func (m *McmManager) Cleanup() {
 
 //GetMachineDeploymentSize returns the replicas field of the MachineDeployment
 func (m *McmManager) GetMachineDeploymentSize(machinedeployment *MachineDeployment) (int64, error) {
-	md, err := m.machineclient.MachineDeployments(machinedeployment.Namespace).Get(machinedeployment.Name, metav1.GetOptions{})
+	md, err := m.machineclient.MachineDeployments(machinedeployment.Namespace).Get(context.TODO(), machinedeployment.Name, metav1.GetOptions{})
 	if err != nil {
 		return 0, fmt.Errorf("Unable to fetch MachineDeployment object %s %+v", machinedeployment.Name, err)
 	}
@@ -219,7 +221,7 @@ func (m *McmManager) SetMachineDeploymentSize(machinedeployment *MachineDeployme
 
 	retryDeadline := time.Now().Add(maxRetryDeadline)
 	for {
-		md, err := m.machineclient.MachineDeployments(machinedeployment.Namespace).Get(machinedeployment.Name, metav1.GetOptions{})
+		md, err := m.machineclient.MachineDeployments(machinedeployment.Namespace).Get(context.TODO(), machinedeployment.Name, metav1.GetOptions{})
 		if err != nil && time.Now().Before(retryDeadline) {
 			klog.Warningf("Unable to fetch MachineDeployment object %s, Error: %+v", machinedeployment.Name, err)
 			time.Sleep(conflictRetryInterval)
@@ -233,7 +235,7 @@ func (m *McmManager) SetMachineDeploymentSize(machinedeployment *MachineDeployme
 		clone := md.DeepCopy()
 		clone.Spec.Replicas = int32(size)
 
-		_, err = m.machineclient.MachineDeployments(machinedeployment.Namespace).Update(clone)
+		_, err = m.machineclient.MachineDeployments(machinedeployment.Namespace).Update(context.TODO(), clone, metav1.UpdateOptions{})
 		if err != nil && time.Now().Before(retryDeadline) {
 			klog.Warningf("Unable to update MachineDeployment object %s, Error: %+v", machinedeployment.Name, err)
 			time.Sleep(conflictRetryInterval)
@@ -279,7 +281,7 @@ func (m *McmManager) DeleteMachines(machines []*Ref) error {
 
 		retryDeadline := time.Now().Add(maxRetryDeadline)
 		for {
-			mach, err := m.machineclient.Machines(machine.Namespace).Get(machine.Name, metav1.GetOptions{})
+			mach, err := m.machineclient.Machines(machine.Namespace).Get(context.TODO(), machine.Name, metav1.GetOptions{})
 			if err != nil && time.Now().Before(retryDeadline) {
 				klog.Warningf("Unable to fetch Machine object %s, Error: %s", machine.Name, err)
 				time.Sleep(conflictRetryInterval)
@@ -299,7 +301,7 @@ func (m *McmManager) DeleteMachines(machines []*Ref) error {
 				mclone.Annotations["machinepriority.machine.sapcloud.io"] = "1"
 			}
 
-			_, err = m.machineclient.Machines(machine.Namespace).Update(mclone)
+			_, err = m.machineclient.Machines(machine.Namespace).Update(context.TODO(), mclone, metav1.UpdateOptions{})
 			if err != nil && time.Now().Before(retryDeadline) {
 				klog.Warningf("Unable to update Machine object %s, Error: %s", machine.Name, err)
 				time.Sleep(conflictRetryInterval)
@@ -317,7 +319,7 @@ func (m *McmManager) DeleteMachines(machines []*Ref) error {
 
 	retryDeadline := time.Now().Add(maxRetryDeadline)
 	for {
-		md, err := m.machineclient.MachineDeployments(commonMachineDeployment.Namespace).Get(commonMachineDeployment.Name, metav1.GetOptions{})
+		md, err := m.machineclient.MachineDeployments(commonMachineDeployment.Namespace).Get(context.TODO(), commonMachineDeployment.Name, metav1.GetOptions{})
 		if err != nil && time.Now().Before(retryDeadline) {
 			klog.Warningf("Unable to fetch MachineDeployment object %s, Error: %s", commonMachineDeployment.Name, err)
 			time.Sleep(conflictRetryInterval)
@@ -334,7 +336,7 @@ func (m *McmManager) DeleteMachines(machines []*Ref) error {
 		}
 		mdclone.Spec.Replicas = mdclone.Spec.Replicas - int32(len(machines))
 
-		_, err = m.machineclient.MachineDeployments(mdclone.Namespace).Update(mdclone)
+		_, err = m.machineclient.MachineDeployments(mdclone.Namespace).Update(context.TODO(), mdclone, metav1.UpdateOptions{})
 		if err != nil && time.Now().Before(retryDeadline) {
 			klog.Warningf("Unable to update MachineDeployment object %s, Error: %s", commonMachineDeployment.Name, err)
 			time.Sleep(conflictRetryInterval)
@@ -356,17 +358,17 @@ func (m *McmManager) DeleteMachines(machines []*Ref) error {
 
 //GetMachineDeploymentNodes returns the set of Nodes which belongs to the MachineDeployment.
 func (m *McmManager) GetMachineDeploymentNodes(machinedeployment *MachineDeployment) ([]string, error) {
-	md, err := m.machineclient.MachineDeployments(m.namespace).Get(machinedeployment.Name, metav1.GetOptions{})
+	md, err := m.machineclient.MachineDeployments(m.namespace).Get(context.TODO(), machinedeployment.Name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("Unable to fetch MachineDeployment object %s, Error: %v", machinedeployment.Name, err)
 	}
 	//machinelist, err := m.machinelisters.Machines(m.namespace).List(labels.Everything())
-	machinelist, err := m.machineclient.Machines(m.namespace).List(metav1.ListOptions{})
+	machinelist, err := m.machineclient.Machines(m.namespace).List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("Unable to fetch list of Machine objects %v", err)
 	}
 
-	nodelist, err := m.coreclient.Core().Nodes().List(metav1.ListOptions{})
+	nodelist, err := m.coreclient.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("Unable to fetch list of Nodes %v", err)
 	}
@@ -389,7 +391,7 @@ func (m *McmManager) GetMachineDeploymentNodes(machinedeployment *MachineDeploym
 //GetMachineDeploymentNodeTemplate returns the NodeTemplate which belongs to the MachineDeployment.
 func (m *McmManager) GetMachineDeploymentNodeTemplate(machinedeployment *MachineDeployment) (*nodeTemplate, error) {
 
-	md, err := m.machineclient.MachineDeployments(m.namespace).Get(machinedeployment.Name, metav1.GetOptions{})
+	md, err := m.machineclient.MachineDeployments(m.namespace).Get(context.TODO(), machinedeployment.Name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("Unable to fetch MachineDeployment object %s, Error: %v", machinedeployment.Name, err)
 	}
@@ -400,7 +402,7 @@ func (m *McmManager) GetMachineDeploymentNodeTemplate(machinedeployment *Machine
 	nodeTemplateSpec := md.Spec.Template.Spec.NodeTemplateSpec
 	switch machineClass.Kind {
 	case "AWSMachineClass":
-		mc, err := m.machineclient.AWSMachineClasses(m.namespace).Get(machineClass.Name, metav1.GetOptions{})
+		mc, err := m.machineclient.AWSMachineClasses(m.namespace).Get(context.TODO(), machineClass.Name, metav1.GetOptions{})
 		if err != nil {
 			return nil, fmt.Errorf("Unable to fetch AWSMachineClass object %s, Error: %v", machinedeployment.Name, err)
 		}
@@ -416,7 +418,7 @@ func (m *McmManager) GetMachineDeploymentNodeTemplate(machinedeployment *Machine
 			zone = mc.Labels["failure-domain.beta.kubernetes.io/zone"]
 		}
 	case "AzureMachineClass":
-		mc, err := m.machineclient.AzureMachineClasses(m.namespace).Get(machineClass.Name, metav1.GetOptions{})
+		mc, err := m.machineclient.AzureMachineClasses(m.namespace).Get(context.TODO(), machineClass.Name, metav1.GetOptions{})
 		if err != nil {
 			return nil, fmt.Errorf("Unable to fetch AzureMachineClass object %s, Error: %v", machinedeployment.Name, err)
 		}
@@ -496,10 +498,10 @@ func buildGenericLabels(template *nodeTemplate, nodeName string) map[string]stri
 	result[kubeletapis.LabelArch] = cloudprovider.DefaultArch
 	result[kubeletapis.LabelOS] = cloudprovider.DefaultOS
 
-	result[kubeletapis.LabelInstanceType] = template.InstanceType.InstanceType
+	result[apiv1.LabelInstanceType] = template.InstanceType.InstanceType
 
-	result[kubeletapis.LabelZoneRegion] = template.Region
-	result[kubeletapis.LabelZoneFailureDomain] = template.Zone
-	result[kubeletapis.LabelHostname] = nodeName
+	result[apiv1.LabelZoneRegion] = template.Region
+	result[apiv1.LabelZoneFailureDomain] = template.Zone
+	result[apiv1.LabelHostname] = nodeName
 	return result
 }
