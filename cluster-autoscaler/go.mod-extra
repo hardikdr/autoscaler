@@ -1,5 +1,5 @@
 module k8s.io/autoscaler/cluster-autoscaler
-go 1.12
+go 1.15
 
 require (
   github.com/digitalocean/godo v1.27.0
@@ -8,4 +8,5 @@ require (
 )
 
 replace (
+  github.com/gardener/machine-controller-manager => /Users/i331134/go/src/github.com/gardener/machine-controller-manager
 )
