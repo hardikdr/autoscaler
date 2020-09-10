@@ -158,7 +158,7 @@ func (m *McmManager) GetMachineDeploymentForMachine(machine *Ref) (*MachineDeplo
 		return nil, fmt.Errorf("Unable to find parent MachineSet of given Machine object %s %+v", machine.Name, err)
 	}
 
-	machineSetObject, err := m.machineclient.MachineSets(m.namespace).Get(nil, machineSetName, metav1.GetOptions{})
+	machineSetObject, err := m.machineclient.MachineSets(m.namespace).Get(context.TODO(), machineSetName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("Unable to fetch MachineSet object %s %+v", machineSetName, err)
 	}
